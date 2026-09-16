@@ -1,0 +1,36 @@
+logLevel: info
+logDestinations: [stdout]
+
+api: true
+apiAddress: :9997
+
+rtmp: false
+srt: false
+moq: false
+webrtc: false
+
+rtsp: true
+rtspTransports: [tcp]
+rtspAddress: :8554
+
+hls: true
+hlsAddress: :7357
+hlsVariant: lowLatency
+hlsAlwaysRemux: true
+
+playback: true
+playbackAddress: :9996
+
+pathDefaults:
+  record: true
+  recordFormat: fmp4
+  recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordSegmentDuration: 1h
+  recordDeleteAfter: 24h
+
+paths:
+  cam:
+    runOnInit: bash capture.sh
+    runOnInitRestart: true
+    runOnAvailable: bash motion.sh
+    runOnAvailableRestart: true
