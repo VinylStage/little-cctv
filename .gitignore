@@ -4,3 +4,4 @@ snapshots/
 .DS_Store
 *.key
 *.crt
+settings.env

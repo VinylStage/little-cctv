@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>little-cctv</title>
+<style>
+  :root { --bg:#0e0f13; --panel:#181a21; --panel2:#20232c; --line:#2b2f3a;
+          --tx:#e8eaf0; --mut:#8b90a0; --acc:#3b82f6; --rec:#ef4444; --ok:#22c55e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--tx);
+         font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:10px; padding:12px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.3px; }
+  header .dot { width:8px; height:8px; border-radius:50%; background:var(--mut); }
+  header .dot.live { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  #rec-badge { margin-left:auto; display:none; align-items:center; gap:6px; color:var(--rec); font-weight:600; }
+  #rec-badge.on { display:flex; }
+  #rec-badge .rd { width:9px; height:9px; border-radius:50%; background:var(--rec); animation:blink 1s steps(2,start) infinite; }
+  #rec-badge.paused .rd { animation:none; opacity:.5; }
+  @keyframes blink { 50% { opacity:.2; } }
+  main { max-width:920px; margin:0 auto; padding:16px; }
+  .stage { position:relative; background:#000; border-radius:12px; overflow:hidden; aspect-ratio:16/9; }
+  video { width:100%; height:100%; display:block; background:#000; object-fit:contain; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-top:14px; }
+  .panel h2 { margin:0 0 10px; font-size:12px; font-weight:600; color:var(--mut); text-transform:uppercase; letter-spacing:.6px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; }
+  button { font:inherit; color:var(--tx); background:var(--panel2); border:1px solid var(--line);
+           border-radius:9px; padding:9px 14px; cursor:pointer; transition:.12s; }
+  button:hover { border-color:#3a4050; }
+  button:active { transform:translateY(1px); }
+  button.active { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.rec { background:var(--rec); border-color:var(--rec); color:#fff; }
+  button.rec:disabled { background:var(--panel2); border-color:var(--line); color:var(--tx); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }
+  .vol { display:flex; align-items:center; gap:10px; margin-top:10px; }
+  .vol input { flex:1; accent-color:var(--acc); }
+  .hint { color:var(--mut); font-size:12px; margin-top:8px; }
+  .sub { color:var(--mut); font-size:12px; font-weight:600; margin:10px 0 6px; }
+  #toast { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:#000d;
+           border:1px solid var(--line); padding:10px 16px; border-radius:10px; opacity:0;
+           transition:.2s; pointer-events:none; }
+  #toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<header>
+  <span id="dot" class="dot"></span>
+  <h1>little-cctv</h1>
+  <span id="rec-badge"><span class="rd"></span><span id="rec-time">REC 00:00</span></span>
+</header>
+
+<main>
+  <div class="stage">
+    <video id="v" playsinline autoplay muted></video>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>해상도</h2>
+      <div class="row" id="res-row">
+        <button data-res="1080">1080</button>
+        <button data-res="720">720</button>
+        <button data-res="540">540</button>
+        <button data-res="360">360</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>프레임</h2>
+      <div class="row" id="fps-row">
+        <button data-fps="60">60 fps</button>
+        <button data-fps="30">30 fps</button>
+      </div>
+      <div class="hint">해상도·프레임 변경 시 약 3초 재연결됩니다.</div>
+    </div>
+
+    <div class="panel">
+      <h2>오디오 채널</h2>
+      <div class="sub">왼쪽 채널</div>
+      <div class="row" id="audL">
+        <button data-mic="cam" class="active">카메라</button>
+        <button data-mic="mac">맥북</button>
+      </div>
+      <div class="sub">오른쪽 채널</div>
+      <div class="row" id="audR">
+        <button data-mic="cam">카메라</button>
+        <button data-mic="mac" class="active">맥북</button>
+      </div>
+      <div class="vol">
+        <button id="mute" title="음소거">🔇</button>
+        <input id="vol" type="range" min="0" max="1" step="0.01" value="1">
+      </div>
+      <div class="hint" id="aud-hint">L=카메라 / R=맥북 · 둘을 같은 마이크로 두면 그 마이크 단일(모노). 첫 클릭 시 소리 켜짐.</div>
+    </div>
+
+    <div class="panel">
+      <h2>녹화</h2>
+      <div class="row" id="rec-row">
+        <button id="rec-start" class="rec">● 녹화</button>
+        <button id="rec-pause" disabled>⏸ 일시정지</button>
+        <button id="rec-stop" disabled>⏹ 종료</button>
+      </div>
+      <div class="hint">모니터링 화질 그대로 로컬 저장 (recordings/). 재인코딩 없음.</div>
+    </div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script src="/static/hls.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const video = $('#v');
+let hls = null;
+
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'), 2200); }
+
+// ---------- stream ----------
+function loadStream(){
+  const src = '/cam/index.m3u8';
+  if (hls){ hls.destroy(); hls=null; }
+  if (window.Hls && Hls.isSupported()){
+    hls = new Hls({ lowLatencyMode:true, liveSyncDurationCount:2, backBufferLength:8 });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, ()=> video.play().catch(()=>{}));
+    hls.on(Hls.Events.ERROR, (e,d)=>{ if(d.fatal){ setTimeout(loadStream, 1500); } });
+  } else {
+    video.src = src; video.play().catch(()=>{});
+  }
+}
+video.addEventListener('playing', ()=> $('#dot').classList.add('live'));
+video.addEventListener('waiting', ()=> $('#dot').classList.remove('live'));
+
+// ---------- audio (client-side channel routing) ----------
+// Stream carries stereo: channel 0 = camera mic, channel 1 = MacBook mic.
+// The user assigns a mic to each OUTPUT channel; same mic on both = mono.
+let actx=null, gains=null, master=null, audioReady=false;
+let leftMic='cam', rightMic='mac';
+function setupAudio(){
+  if (audioReady) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  actx = new AC();
+  const srcNode = actx.createMediaElementSource(video);
+  const splitter = actx.createChannelSplitter(2);   // 0 = camera, 1 = macbook
+  const merger = actx.createChannelMerger(2);        // 0 = out L, 1 = out R
+  gains = { camL:actx.createGain(), camR:actx.createGain(), macL:actx.createGain(), macR:actx.createGain() };
+  master = actx.createGain();
+  splitter.connect(gains.camL,0); gains.camL.connect(merger,0,0);
+  splitter.connect(gains.camR,0); gains.camR.connect(merger,0,1);
+  splitter.connect(gains.macL,1); gains.macL.connect(merger,0,0);
+  splitter.connect(gains.macR,1); gains.macR.connect(merger,0,1);
+  srcNode.connect(splitter);
+  merger.connect(master); master.connect(actx.destination);
+  master.gain.value = parseFloat($('#vol').value);
+  audioReady = true;
+  applyChannel();
+}
+function applyChannel(){
+  if (!gains) return;
+  gains.camL.gain.value = leftMic==='cam'?1:0;
+  gains.macL.gain.value = leftMic==='mac'?1:0;
+  gains.camR.gain.value = rightMic==='cam'?1:0;
+  gains.macR.gain.value = rightMic==='mac'?1:0;
+  const nm = m => m==='cam'?'카메라':'맥북';
+  $('#aud-hint').textContent = (leftMic===rightMic)
+    ? `${nm(leftMic)} 단일 (모노)`
+    : `L=${nm(leftMic)} / R=${nm(rightMic)}`;
+}
+function enableAudio(){
+  setupAudio();
+  if (actx.state === 'suspended') actx.resume();
+  video.muted = false;
+}
+$('#audL').addEventListener('click', e=>{
+  const b = e.target.closest('button[data-mic]'); if(!b) return;
+  leftMic = b.dataset.mic;
+  document.querySelectorAll('#audL button').forEach(x=>x.classList.toggle('active', x===b));
+  enableAudio(); applyChannel();
+});
+$('#audR').addEventListener('click', e=>{
+  const b = e.target.closest('button[data-mic]'); if(!b) return;
+  rightMic = b.dataset.mic;
+  document.querySelectorAll('#audR button').forEach(x=>x.classList.toggle('active', x===b));
+  enableAudio(); applyChannel();
+});
+$('#vol').addEventListener('input', e=>{
+  const v = parseFloat(e.target.value);
+  if (master) master.gain.value = v;
+  video.volume = v;
+});
+let muted=false;
+$('#mute').addEventListener('click', ()=>{
+  enableAudio(); muted=!muted;
+  const v = muted?0:parseFloat($('#vol').value);
+  if (master) master.gain.value = v;
+  video.muted = muted && !audioReady;   // fallback path
+  $('#mute').textContent = muted?'🔈':'🔇';
+});
+
+// ---------- settings (res / fps) ----------
+let cur = { res:'1080', fps:'30' };
+function markActive(){
+  document.querySelectorAll('#res-row button').forEach(b=>b.classList.toggle('active', b.dataset.res===cur.res));
+  document.querySelectorAll('#fps-row button').forEach(b=>b.classList.toggle('active', b.dataset.fps===cur.fps));
+}
+async function applySettings(next){
+  const body = { res: next.res||cur.res, fps: next.fps||cur.fps };
+  document.querySelectorAll('#res-row button,#fps-row button').forEach(b=>b.disabled=true);
+  toast('적용 중… 약 3초');
+  try{
+    const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok) throw 0;
+    cur = { res:body.res, fps:body.fps }; markActive();
+    setTimeout(()=>{ loadStream(); toast(`${cur.res}p / ${cur.fps}fps 적용됨`); }, 4200);
+  }catch{ toast('설정 변경 실패'); }
+  finally{ setTimeout(()=>document.querySelectorAll('#res-row button,#fps-row button').forEach(b=>b.disabled=false), 4300); }
+}
+$('#res-row').addEventListener('click', e=>{ const b=e.target.closest('button[data-res]'); if(b) applySettings({res:b.dataset.res}); });
+$('#fps-row').addEventListener('click', e=>{ const b=e.target.closest('button[data-fps]'); if(b) applySettings({fps:b.dataset.fps}); });
+
+// ---------- recording ----------
+let recState='idle', recSince=null, recTimer=null;
+function renderRec(){
+  const badge=$('#rec-badge');
+  $('#rec-start').disabled = (recState==='recording');
+  $('#rec-pause').disabled = (recState!=='recording');
+  $('#rec-stop').disabled  = (recState==='idle');
+  $('#rec-start').textContent = (recState==='paused') ? '● 재개' : '● 녹화';
+  badge.classList.toggle('on', recState!=='idle');
+  badge.classList.toggle('paused', recState==='paused');
+  if (recState==='recording' && recSince){
+    if(!recTimer) recTimer=setInterval(tickRec,1000); tickRec();
+  } else { clearInterval(recTimer); recTimer=null;
+    if(recState==='paused') $('#rec-time').textContent='일시정지'; }
+}
+function tickRec(){
+  if(!recSince) return;
+  const s=Math.max(0,Math.floor(Date.now()/1000 - recSince));
+  const mm=String(Math.floor(s/60)).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
+  $('#rec-time').textContent=`REC ${mm}:${ss}`;
+}
+async function recCmd(action){
+  try{
+    const r=await fetch('/api/record',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+    const j=await r.json(); if(!r.ok) throw 0;
+    recState=j.record.state; recSince=j.record.since ? j.record.since*1000 : null; renderRec();
+    toast({start:'녹화 시작',resume:'녹화 재개',pause:'일시정지',stop:'녹화 종료'}[action]||'');
+  }catch{ toast('녹화 명령 실패'); }
+}
+$('#rec-start').addEventListener('click', ()=> recCmd(recState==='paused'?'resume':'start'));
+$('#rec-pause').addEventListener('click', ()=> recCmd('pause'));
+$('#rec-stop').addEventListener('click', ()=> recCmd('stop'));
+
+// ---------- init ----------
+async function init(){
+  loadStream();
+  try{
+    const j = await (await fetch('/api/status')).json();
+    cur = { res:j.res||'1080', fps:j.fps||'30' }; markActive();
+    if(j.record){ recState=j.record.state; recSince=j.record.since?j.record.since*1000:null; renderRec(); }
+  }catch{}
+}
+init();
+</script>
+</body>
+</html>
