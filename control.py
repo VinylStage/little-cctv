@@ -30,7 +30,8 @@ REC_DIR = os.path.join(HERE, "recordings")
 
 ALLOWED_RES = {"1080", "720", "540", "360"}
 ALLOWED_FPS = {"30", "60"}
-DEFAULTS = {"RES_H": "1080", "FPS": "30"}
+ALLOWED_AUDIO = {"cam", "mac"}
+DEFAULTS = {"RES_H": "1080", "FPS": "30", "AUDIO_DEV": "cam"}
 
 
 # ---------------------------------------------------------------- settings
@@ -49,10 +50,10 @@ def read_settings():
     return s
 
 
-def write_settings(res, fps):
+def write_settings(res, fps, audio):
     tmp = SETTINGS + ".tmp"
     with open(tmp, "w") as f:
-        f.write(f"RES_H={res}\nFPS={fps}\n")
+        f.write(f"RES_H={res}\nFPS={fps}\nAUDIO_DEV={audio}\n")
     os.replace(tmp, SETTINGS)
 
 
@@ -184,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/status":
             s = read_settings()
             self._json({"res": s.get("RES_H", "1080"), "fps": s.get("FPS", "30"),
-                        "record": rec_status()})
+                        "audio": s.get("AUDIO_DEV", "cam"), "record": rec_status()})
         elif p.startswith("/static/"):
             name = os.path.basename(p)
             ctype = "application/javascript" if name.endswith(".js") else "text/plain"
@@ -202,13 +203,16 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             body = {}
         if p == "/api/settings":
-            res, fps = str(body.get("res", "")), str(body.get("fps", ""))
-            if res not in ALLOWED_RES or fps not in ALLOWED_FPS:
-                self._json({"error": "invalid res/fps"}, 400)
+            cur = read_settings()
+            res = str(body.get("res", cur.get("RES_H", "1080")))
+            fps = str(body.get("fps", cur.get("FPS", "30")))
+            audio = str(body.get("audio", cur.get("AUDIO_DEV", "cam")))
+            if res not in ALLOWED_RES or fps not in ALLOWED_FPS or audio not in ALLOWED_AUDIO:
+                self._json({"error": "invalid res/fps/audio"}, 400)
                 return
-            write_settings(res, fps)
+            write_settings(res, fps, audio)
             restart_capture()
-            self._json({"ok": True, "res": res, "fps": fps})
+            self._json({"ok": True, "res": res, "fps": fps, "audio": audio})
         elif p == "/api/record":
             action = str(body.get("action", ""))
             if action not in ("start", "pause", "resume", "stop"):

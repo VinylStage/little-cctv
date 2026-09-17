@@ -22,6 +22,11 @@
   main { max-width:920px; margin:0 auto; padding:16px; }
   .stage { position:relative; background:#000; border-radius:12px; overflow:hidden; aspect-ratio:16/9; }
   video { width:100%; height:100%; display:block; background:#000; object-fit:contain; }
+  .offline { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+             justify-content:center; gap:8px; text-align:center; color:var(--tx);
+             background:rgba(0,0,0,.6); font-weight:600; padding:16px; }
+  .offline small { font-weight:400; color:var(--mut); }
+  .offline[hidden] { display:none; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-top:14px; }
   .panel h2 { margin:0 0 10px; font-size:12px; font-weight:600; color:var(--mut); text-transform:uppercase; letter-spacing:.6px; }
   .row { display:flex; flex-wrap:wrap; gap:8px; }
@@ -54,6 +59,11 @@
 <main>
   <div class="stage">
     <video id="v" playsinline autoplay muted></video>
+    <div id="offline" class="offline" hidden>
+      <div>카메라 신호 없음</div>
+      <small>다른 앱(OBS 등)이 카메라를 사용 중인지 확인하세요.<br>카메라가 풀리면 몇 초 내 자동 복구됩니다.</small>
+      <button id="offline-hide">가리기 ✕</button>
+    </div>
   </div>
 
   <div class="grid">
@@ -77,22 +87,16 @@
     </div>
 
     <div class="panel">
-      <h2>오디오 채널</h2>
-      <div class="sub">왼쪽 채널</div>
-      <div class="row" id="audL">
+      <h2>마이크</h2>
+      <div class="row" id="mic-row">
         <button data-mic="cam" class="active">카메라</button>
         <button data-mic="mac">맥북</button>
-      </div>
-      <div class="sub">오른쪽 채널</div>
-      <div class="row" id="audR">
-        <button data-mic="cam">카메라</button>
-        <button data-mic="mac" class="active">맥북</button>
       </div>
       <div class="vol">
         <button id="mute" title="음소거">🔇</button>
         <input id="vol" type="range" min="0" max="1" step="0.01" value="1">
       </div>
-      <div class="hint" id="aud-hint">L=카메라 / R=맥북 · 둘을 같은 마이크로 두면 그 마이크 단일(모노). 첫 클릭 시 소리 켜짐.</div>
+      <div class="hint">선택한 마이크를 양쪽으로 출력. 변경 시 약 3초 재연결. 첫 클릭 시 소리 켜짐.</div>
     </div>
 
     <div class="panel">
@@ -114,6 +118,7 @@
 const $ = s => document.querySelector(s);
 const video = $('#v');
 let hls = null;
+let lastT = -1, lastMove = Date.now();
 
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'), 2200); }
@@ -121,9 +126,10 @@ function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('sh
 // ---------- stream ----------
 function loadStream(){
   const src = '/cam/index.m3u8';
+  lastT = -1; lastMove = Date.now();
   if (hls){ hls.destroy(); hls=null; }
   if (window.Hls && Hls.isSupported()){
-    hls = new Hls({ lowLatencyMode:true, liveSyncDurationCount:2, backBufferLength:8 });
+    hls = new Hls({ lowLatencyMode:false, liveSyncDurationCount:3, backBufferLength:30, maxBufferLength:30 });
     hls.loadSource(src);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, ()=> video.play().catch(()=>{}));
@@ -132,92 +138,57 @@ function loadStream(){
     video.src = src; video.play().catch(()=>{});
   }
 }
-video.addEventListener('playing', ()=> $('#dot').classList.add('live'));
-video.addEventListener('waiting', ()=> $('#dot').classList.remove('live'));
+// Overlay is driven purely by whether the picture is ADVANCING (currentTime moving).
+// A live, moving stream never shows it; only a genuine multi-second freeze does.
+// The "가리기" button dismisses it manually until the picture recovers.
+let overlayDismissed=false;
+$('#offline-hide').addEventListener('click', ()=>{ $('#offline').hidden=true; overlayDismissed=true; });
+setInterval(()=>{
+  const t = video.currentTime;
+  if (Math.abs(t - lastT) > 0.02){ lastT=t; lastMove=Date.now(); overlayDismissed=false; $('#dot').classList.add('live'); $('#offline').hidden=true; }
+  else if (Date.now() - lastMove > 8000 && !overlayDismissed){ $('#dot').classList.remove('live'); $('#offline').hidden=false; }
+}, 2000);
 
 // ---------- audio (client-side channel routing) ----------
-// Stream carries stereo: channel 0 = camera mic, channel 1 = MacBook mic.
-// The user assigns a mic to each OUTPUT channel; same mic on both = mono.
-let actx=null, gains=null, master=null, audioReady=false;
-let leftMic='cam', rightMic='mac';
-function setupAudio(){
-  if (audioReady) return;
-  const AC = window.AudioContext || window.webkitAudioContext;
-  actx = new AC();
-  const srcNode = actx.createMediaElementSource(video);
-  const splitter = actx.createChannelSplitter(2);   // 0 = camera, 1 = macbook
-  const merger = actx.createChannelMerger(2);        // 0 = out L, 1 = out R
-  gains = { camL:actx.createGain(), camR:actx.createGain(), macL:actx.createGain(), macR:actx.createGain() };
-  master = actx.createGain();
-  splitter.connect(gains.camL,0); gains.camL.connect(merger,0,0);
-  splitter.connect(gains.camR,0); gains.camR.connect(merger,0,1);
-  splitter.connect(gains.macL,1); gains.macL.connect(merger,0,0);
-  splitter.connect(gains.macR,1); gains.macR.connect(merger,0,1);
-  srcNode.connect(splitter);
-  merger.connect(master); master.connect(actx.destination);
-  master.gain.value = parseFloat($('#vol').value);
-  audioReady = true;
-  applyChannel();
-}
-function applyChannel(){
-  if (!gains) return;
-  gains.camL.gain.value = leftMic==='cam'?1:0;
-  gains.macL.gain.value = leftMic==='mac'?1:0;
-  gains.camR.gain.value = rightMic==='cam'?1:0;
-  gains.macR.gain.value = rightMic==='mac'?1:0;
-  const nm = m => m==='cam'?'카메라':'맥북';
-  $('#aud-hint').textContent = (leftMic===rightMic)
-    ? `${nm(leftMic)} 단일 (모노)`
-    : `L=${nm(leftMic)} / R=${nm(rightMic)}`;
-}
-function enableAudio(){
-  setupAudio();
-  if (actx.state === 'suspended') actx.resume();
-  video.muted = false;
-}
-$('#audL').addEventListener('click', e=>{
+// Audio plays natively from the <video>. The chosen mic is captured server-side
+// (stereo, both channels), so no client-side channel routing is needed.
+let muted = true;   // starts muted for autoplay; first interaction unmutes
+video.volume = parseFloat($('#vol').value);
+function enableSound(){ if (video.muted){ video.muted=false; muted=false; $('#mute').textContent='🔇'; } }
+$('#mic-row').addEventListener('click', e=>{
   const b = e.target.closest('button[data-mic]'); if(!b) return;
-  leftMic = b.dataset.mic;
-  document.querySelectorAll('#audL button').forEach(x=>x.classList.toggle('active', x===b));
-  enableAudio(); applyChannel();
-});
-$('#audR').addEventListener('click', e=>{
-  const b = e.target.closest('button[data-mic]'); if(!b) return;
-  rightMic = b.dataset.mic;
-  document.querySelectorAll('#audR button').forEach(x=>x.classList.toggle('active', x===b));
-  enableAudio(); applyChannel();
+  enableSound();
+  if (b.dataset.mic !== cur.audio) applySettings({ audio: b.dataset.mic });
 });
 $('#vol').addEventListener('input', e=>{
-  const v = parseFloat(e.target.value);
-  if (master) master.gain.value = v;
-  video.volume = v;
+  video.volume = parseFloat(e.target.value);
+  if (video.volume > 0) enableSound();
 });
-let muted=false;
 $('#mute').addEventListener('click', ()=>{
-  enableAudio(); muted=!muted;
-  const v = muted?0:parseFloat($('#vol').value);
-  if (master) master.gain.value = v;
-  video.muted = muted && !audioReady;   // fallback path
-  $('#mute').textContent = muted?'🔈':'🔇';
+  muted = !muted; video.muted = muted;
+  $('#mute').textContent = muted ? '🔈' : '🔇';
 });
 
 // ---------- settings (res / fps) ----------
-let cur = { res:'1080', fps:'30' };
+let cur = { res:'1080', fps:'30', audio:'cam' };
 function markActive(){
   document.querySelectorAll('#res-row button').forEach(b=>b.classList.toggle('active', b.dataset.res===cur.res));
   document.querySelectorAll('#fps-row button').forEach(b=>b.classList.toggle('active', b.dataset.fps===cur.fps));
+  document.querySelectorAll('#mic-row button').forEach(b=>b.classList.toggle('active', b.dataset.mic===cur.audio));
 }
+const SETBTNS = '#res-row button,#fps-row button,#mic-row button';
 async function applySettings(next){
-  const body = { res: next.res||cur.res, fps: next.fps||cur.fps };
-  document.querySelectorAll('#res-row button,#fps-row button').forEach(b=>b.disabled=true);
+  const body = { res: next.res||cur.res, fps: next.fps||cur.fps, audio: next.audio||cur.audio };
+  document.querySelectorAll(SETBTNS).forEach(b=>b.disabled=true);
   toast('적용 중… 약 3초');
   try{
     const r = await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(!r.ok) throw 0;
-    cur = { res:body.res, fps:body.fps }; markActive();
-    setTimeout(()=>{ loadStream(); toast(`${cur.res}p / ${cur.fps}fps 적용됨`); }, 4200);
+    const j = await r.json();
+    cur = { res:j.res, fps:j.fps, audio:j.audio }; markActive();
+    setTimeout(()=>{ loadStream(); toast(`${cur.res}p / ${cur.fps}fps / ${cur.audio==='cam'?'카메라':'맥북'} 적용됨`); }, 4200);
   }catch{ toast('설정 변경 실패'); }
-  finally{ setTimeout(()=>document.querySelectorAll('#res-row button,#fps-row button').forEach(b=>b.disabled=false), 4300); }
+  finally{ setTimeout(()=>document.querySelectorAll(SETBTNS).forEach(b=>b.disabled=false), 4300); }
 }
 $('#res-row').addEventListener('click', e=>{ const b=e.target.closest('button[data-res]'); if(b) applySettings({res:b.dataset.res}); });
 $('#fps-row').addEventListener('click', e=>{ const b=e.target.closest('button[data-fps]'); if(b) applySettings({fps:b.dataset.fps}); });
@@ -260,7 +231,7 @@ async function init(){
   loadStream();
   try{
     const j = await (await fetch('/api/status')).json();
-    cur = { res:j.res||'1080', fps:j.fps||'30' }; markActive();
+    cur = { res:j.res||'1080', fps:j.fps||'30', audio:j.audio||'cam' }; markActive();
     if(j.record){ recState=j.record.state; recSince=j.record.since?j.record.since*1000:null; renderRec(); }
   }catch{}
 }

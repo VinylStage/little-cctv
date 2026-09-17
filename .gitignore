@@ -5,3 +5,4 @@ snapshots/
 *.key
 *.crt
 settings.env
+__pycache__/
