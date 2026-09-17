@@ -22,6 +22,7 @@ mkdir -p "$SNAP_DIR"
 sleep 3
 
 exec ffmpeg -hide_banner -loglevel warning \
+  -hwaccel videotoolbox \
   -rtsp_transport tcp -i "$RTSP_URL" \
   -an \
   -vf "fps=5,scale=640:-1,select='gt(scene,${MOTION_THRESH})',metadata=print:file=${MOTION_LOG}" \

@@ -45,7 +45,7 @@ exec ffmpeg -hide_banner -loglevel warning \
   -i "${VIDEO_IDX}:${AIDX}" \
   -vf "$VF" \
   -map 0:v:0 -map 0:a:0 \
-  -c:v h264_videotoolbox -profile:v main -realtime true \
+  -c:v h264_videotoolbox -profile:v main -realtime true -bf 0 \
   -b:v "${VB}k" -maxrate "${VB}k" -bufsize "$((VB * 2))k" -g "$GOP" -r "$FPS" \
   -c:a aac -b:a 128k -ar 48000 -ac 2 \
   -f rtsp -rtsp_transport tcp "$RTSP_URL"

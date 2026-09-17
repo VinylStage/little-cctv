@@ -1,93 +1,120 @@
 # little-cctv
 
-Razer Kiyo Pro를 임시 CCTV로 쓰는 최소 구성. macOS 로컬에서 캡처·(온디맨드) 녹화하고,
-외부에서 브라우저 **대시보드**로 라이브 시청 + 화질/프레임/오디오/녹화를 제어.
+Turn a USB webcam on a Mac into a simple CCTV you can watch from a browser — live view,
+audio, on-demand recording, and motion snapshots — controlled from a small dashboard.
+Built and tested with a **Razer Kiyo Pro**, but works with any UVC webcam.
 
-- 캡처/인코딩: `ffmpeg` (avfoundation) — **하드웨어 인코딩(VideoToolbox)**, 스케일링, 듀얼 마이크
-- 미디어 서버: `MediaMTX` — LL-HLS (내부 전용) + RTSP 재스트림
-- 제어 서버: `control.py` (Python 표준 라이브러리, 의존성 0) — 대시보드 + 컨트롤 API + HLS 프록시
-- 움직임 감지: `ffmpeg` scene 필터 → 스냅샷 + 이벤트 로그
-- 인증 없음 (외부 노출은 공유기에서 IP 제한 전제)
+- **Capture / encode:** `ffmpeg` (avfoundation) with hardware H.264 (VideoToolbox)
+- **Media server:** `MediaMTX` — fMP4 HLS (internal) + RTSP restream
+- **Control server:** `control.py` — Python standard library only, no dependencies
+- **Motion detection:** `ffmpeg` scene filter → snapshots + event log
+- **No authentication by design** (intended for a trusted LAN; see the warning below)
 
-## 요구 사항
+## Requirements
 
-- macOS (Apple Silicon), Homebrew
-- `brew install ffmpeg mediamtx`  (Python3는 시스템/pyenv 기본)
+- macOS (Apple Silicon recommended)
+- [Homebrew](https://brew.sh)
+- `brew install ffmpeg mediamtx` (Python 3 ships with macOS / your toolchain)
 
-## 실행
+## Quick start
 
-**반드시 Terminal.app에서 실행** — macOS가 카메라/마이크 권한(TCC)을 실행한 앱에 부여함. 첫 실행 시 권한 팝업 → 허용.
+Run it from **Terminal.app** so macOS attaches the Camera/Microphone permission to it.
+On first launch, allow the Camera and Microphone prompts.
 
 ```
 ./run.sh
 ```
 
-- `run.sh`가 MediaMTX + `control.py`를 함께 띄우고, MediaMTX가 `capture.sh`(캡처)·`motion.sh`(감지)를 자동 실행.
-- 중지: `Ctrl+C` (모든 하위 프로세스 정리)
+It prints the dashboard URL, e.g. `http://192.168.1.20:7357/`. Open that in a browser
+on the same network. Press `Ctrl+C` to stop (it cleans up all child processes).
 
-## 접속 (대시보드)
-
-- 기본적으로 **유선 LAN 인터페이스(en10)** 에 바인딩. IP는 실행 시 자동 조회(하드코딩 없음, `IFACE`로 변경).
-- LAN: `http://<en10-IP>:7357/`  (예: `http://192.168.0.2:7357/`)
-- 원격: `http://<공인-IP>:7357/`
-
-HTTP라서 "주의 요함(비보안)" 표시는 정상 — 인증/TLS 없는 설계.
-
-### 외부 접속 포트포워딩 (공유기에서 직접)
+If your webcam is not device index 0, list your devices and set the indices (see Config):
 
 ```
-외부(WAN) 7357  →  유선 LAN(en10) IP : 7357   (TCP)
+ffmpeg -f avfoundation -list_devices true -i ""
 ```
 
-- **이 한 포트(TCP 7357)면 충분.** WebRTC 미사용이라 별도 미디어 포트 불필요.
-- 라우터에서 접속 허용 IP 제한 권장 (인증 없음).
+## Dashboard
 
-## 대시보드 기능
+- **Resolution:** 1080 / 720 / 540 / 360
+- **Framerate:** 60 / 30 (changing resolution/fps restarts capture, ~3 s reconnect)
+- **Microphone:** pick one source (camera or the Mac mic); it is output to both channels.
+  Changing the mic restarts capture. Click a control once to enable sound (browser autoplay policy).
+- **Recording:** start / pause / stop — saved to `./recordings/` with `-c copy`
+  (no re-encode; recording quality follows the live monitoring quality)
+- A "camera offline" overlay appears only if the picture actually freezes (e.g. another app
+  grabbed the USB camera); it clears automatically when the stream resumes.
 
-- **해상도**: 1080 / 720 / 540 / 360 (1080p 캡처 후 스케일)
-- **프레임**: 60 / 30
-  - 해상도·프레임 변경 시 캡처가 재시작되어 약 3초 재연결.
-- **오디오 채널** (브라우저에서 즉시 전환, 재인코딩 없음):
-  - 왼쪽 채널 마이크: 카메라 / 맥북 (택1)
-  - 오른쪽 채널 마이크: 카메라 / 맥북 (택1)
-  - 양쪽을 같은 마이크로 두면 그 마이크 단일(모노) 자동 처리
-  - 첫 오디오 클릭 시 소리가 켜짐(브라우저 자동재생 정책)
-- **녹화** (온디맨드): 녹화 / 일시정지 / 종료
-  - 모니터링 스트림을 `-c copy`로 저장 → **화질은 모니터링을 그대로 따라감**(재인코딩 없음)
-  - 저장 위치: `./recordings/rec_<timestamp>.mp4` (fragmented MP4, 중단돼도 재생 가능)
+Latency is roughly 2–4 s (standard fMP4 HLS), which is fine for monitoring.
 
-## 움직임 감지
+## Motion detection
 
-- 스냅샷: `./snapshots/motion_YYYYMMDD_HHMMSS.jpg`, 이벤트 로그: `./motion.log`
-- 카메라를 재오픈하지 않고 MediaMTX RTSP 재스트림을 구독.
-- 민감도: `MOTION_THRESH`(기본 0.05, 높을수록 둔감).
+- Snapshots: `./snapshots/motion_YYYYMMDD_HHMMSS.jpg`, event log: `./motion.log`
+- Reads the MediaMTX RTSP restream (never re-opens the USB camera).
+- Sensitivity: `MOTION_THRESH` (default `0.05`; higher = less sensitive).
 
-## 설정 (환경변수)
+## Remote access
 
-| 변수 | 기본값 | 설명 |
+The dashboard, the HLS stream, and the control API are all served on **one TCP port**
+(default `7357`). To watch from outside your LAN, forward that single port on your router:
+
+```
+WAN <port>  ->  <this-mac-LAN-IP>:7357   (TCP)
+```
+
+Then open `http://<your-public-IP>:<port>/`.
+
+> ⚠️ **Security — read this before forwarding a port.**
+> little-cctv has **no authentication and no TLS by design.** Anyone who can reach the port
+> gets your live camera, audio, and the control API (including recording). Only expose it on a
+> **trusted LAN**, and if you port-forward, **restrict access to specific source IPs on your router.**
+> By default the server binds `0.0.0.0` (all interfaces). Set `BIND_ADDR` to restrict it
+> (e.g. `BIND_ADDR=127.0.0.1` for local-only, or `IFACE=en0` to bind one interface).
+
+## Configuration (environment variables)
+
+| Variable | Default | Purpose |
 |---|---|---|
-| `IFACE` | `en10` | 대시보드를 바인딩할 인터페이스(유선 LAN). IP는 실행 시 자동 조회 |
-| `PORT` | `7357` | 대시보드/HLS 공개 포트 |
-| `BIND_ADDR` | (en10 IP) | 바인드 주소 직접 지정(예: `127.0.0.1`, `0.0.0.0`) |
-| `AUDIO_MODE` | `dual` | `dual`(카메라+맥북 스테레오) \| `single`(카메라만) |
-| `MOTION_THRESH` | `0.05` | 움직임 감지 민감도 |
-| `VIDEO_IDX`/`CAM_AUDIO_IDX`/`MAC_AUDIO_IDX` | `0`/`0`/`1` | avfoundation 장치 인덱스 |
+| `PORT` | `7357` | Dashboard / public port |
+| `BIND_ADDR` | `0.0.0.0` | Bind address; set to `127.0.0.1` for local-only |
+| `IFACE` | — | Bind a specific interface's IPv4 instead (e.g. `en0`) |
+| `MEDIAMTX_BIN` | auto / `/opt/homebrew/bin/mediamtx` | Path to the MediaMTX binary |
+| `AUDIO_DEV` | `cam` | Mic source: `cam` (camera) or `mac` (Mac mic) |
+| `VIDEO_IDX` / `CAM_AUDIO_IDX` / `MAC_AUDIO_IDX` | `0` / `0` / `1` | avfoundation device indices |
+| `MOTION_THRESH` | `0.05` | Motion sensitivity (higher = less sensitive) |
 
-- 해상도/프레임 현재값은 대시보드가 `settings.env`에 기록(런타임 상태, git 무시).
-- 장치 인덱스 확인: `ffmpeg -f avfoundation -list_devices true -i ""`
+Resolution/framerate/mic are also set live from the dashboard and stored in `settings.env`
+(git-ignored runtime state).
 
-## 내부 포트
+## How it works
 
-| 포트 | 용도 | 노출 |
+```
+USB webcam
+  └─ ffmpeg (VideoToolbox H.264 + AAC)  →  RTSP → MediaMTX ─┬─ fMP4 HLS  (127.0.0.1:8888)
+                                                            └─ RTSP restream (motion, recorder)
+control.py (:7357) serves the dashboard, proxies /cam/* → MediaMTX HLS, and handles the control API.
+```
+
+| Port | Role | Exposure |
 |---|---|---|
-| 7357 | 대시보드 + HLS 프록시 + 컨트롤 API (control.py) | 외부 포워딩 대상 |
-| 8888 | MediaMTX LL-HLS | 127.0.0.1 전용 |
-| 8554 | MediaMTX RTSP (캡처·감지·녹화용) | 127.0.0.1 전용 |
-| 9997 | MediaMTX API | 127.0.0.1 전용 |
+| 7357 | dashboard + HLS proxy + control API | forwarded / LAN |
+| 8888 | MediaMTX HLS | 127.0.0.1 only |
+| 8554 | MediaMTX RTSP (capture / motion / recorder) | 127.0.0.1 only |
+| 9997 | MediaMTX API | 127.0.0.1 only |
 
-## 주의
+## Tuning a Razer Kiyo Pro on macOS (optional)
 
-- 인증/TLS 없음. 외부 노출 시 공유기 IP 화이트리스트 필수.
-- 해상도/프레임 변경은 캡처를 재시작하므로, **녹화 중이면 해당 녹화가 종료됨**.
-- HDR/노출은 macOS에서 Razer 소프트로 조절 불가(Synapse는 윈도우 전용).
-- 임시(하루) 용도 기준. 상시 운영이면 TLS·인증·디스크 정책 별도 검토.
+Razer Synapse does not support the Kiyo Pro on macOS. Use [`kiyoctl`](https://github.com/asm0dey/kiyoctl)
+to adjust exposure, white balance, focus, HDR, and field-of-view (`brew install asm0dey/tap/kiyoctl`).
+For a fixed room monitor, disable continuous autofocus and set a fixed focus so it does not hunt.
+
+## Notes
+
+- Recordings and snapshots are not pruned automatically — clean `./recordings/` and
+  `./snapshots/` yourself, or add a cron/launchd job.
+- Changing resolution/framerate/mic restarts the capture, which ends any in-progress recording.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Bundles [hls.js](https://github.com/video-dev/hls.js) (Apache-2.0)
+in `static/`.

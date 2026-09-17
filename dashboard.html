@@ -154,7 +154,7 @@ setInterval(()=>{
 // (stereo, both channels), so no client-side channel routing is needed.
 let muted = true;   // starts muted for autoplay; first interaction unmutes
 video.volume = parseFloat($('#vol').value);
-function enableSound(){ if (video.muted){ video.muted=false; muted=false; $('#mute').textContent='🔇'; } }
+function enableSound(){ if (video.muted){ video.muted=false; muted=false; $('#mute').textContent='🔊'; } }
 $('#mic-row').addEventListener('click', e=>{
   const b = e.target.closest('button[data-mic]'); if(!b) return;
   enableSound();
@@ -166,7 +166,7 @@ $('#vol').addEventListener('input', e=>{
 });
 $('#mute').addEventListener('click', ()=>{
   muted = !muted; video.muted = muted;
-  $('#mute').textContent = muted ? '🔈' : '🔇';
+  $('#mute').textContent = muted ? '🔇' : '🔊';
 });
 
 // ---------- settings (res / fps) ----------

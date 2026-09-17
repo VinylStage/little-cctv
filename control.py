@@ -21,7 +21,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BIND = os.environ.get("BIND_ADDR", "0.0.0.0")
+BIND = os.environ.get("BIND_ADDR", "127.0.0.1")
 PORT = int(os.environ.get("PORT", "7357"))
 UPSTREAM = os.environ.get("UPSTREAM", "127.0.0.1:8888")          # MediaMTX HLS
 RTSP = os.environ.get("RTSP_URL", "rtsp://localhost:8554/cam")   # internal restream
@@ -58,9 +58,10 @@ def write_settings(res, fps, audio):
 
 
 def restart_capture():
-    # Kill the capture ffmpeg; MediaMTX (runOnInitRestart) relaunches capture.sh,
-    # which re-reads settings.env. Motion/recorder read RTSP, not avfoundation.
-    subprocess.run(["pkill", "-f", "avfoundation"], check=False)
+    # Kill only THIS project's capture ffmpeg (an avfoundation input publishing to our
+    # RTSP path); MediaMTX (runOnInitRestart) relaunches capture.sh, which re-reads
+    # settings.env. The pattern is scoped so it never matches unrelated ffmpeg/apps.
+    subprocess.run(["pkill", "-f", f"avfoundation.*{RTSP}"], check=False)
 
 
 # ---------------------------------------------------------------- recorder
@@ -162,21 +163,37 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _proxy(self):
+        # Reverse-proxy /cam/* to the internal MediaMTX HLS server, streaming the body
+        # through in chunks (no full-segment buffering) to keep latency and RAM low.
         url = f"http://{UPSTREAM}{self.path}"
         try:
-            with urllib.request.urlopen(urllib.request.Request(url), timeout=30) as up:
-                data = up.read()
-                self.send_response(up.status)
-                ct = up.headers.get("Content-Type")
-                self.send_header("Content-Type", ct or "application/octet-stream")
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
-                self.wfile.write(data)
+            up = urllib.request.urlopen(urllib.request.Request(url), timeout=30)
         except urllib.error.HTTPError as e:
             self.send_error(e.code)
+            return
         except Exception:
             self.send_error(502)
+            return
+        try:
+            self.send_response(up.status)
+            self.send_header("Content-Type", up.headers.get("Content-Type") or "application/octet-stream")
+            cl = up.headers.get("Content-Length")
+            if cl is not None:
+                self.send_header("Content-Length", cl)
+            else:
+                self.close_connection = True
+                self.send_header("Connection", "close")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            while True:
+                chunk = up.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except Exception:
+            self.close_connection = True
+        finally:
+            up.close()
 
     def do_GET(self):
         p = self.path.split("?", 1)[0]
@@ -197,7 +214,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = self.path.split("?", 1)[0]
-        n = int(self.headers.get("Content-Length", "0") or 0)
+        try:
+            n = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            n = 0
+        if n < 0 or n > 65536:
+            self.send_error(400)
+            return
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except Exception:

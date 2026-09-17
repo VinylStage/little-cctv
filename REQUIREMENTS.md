@@ -1,5 +1,10 @@
 # little-cctv — 요구사항 & 아키텍처 (컨펌용)
 
+> ⚠️ **Historical planning document.** This is the pre-build plan and does **not** reflect the
+> shipped implementation (which uses HLS instead of WebRTC, AAC instead of Opus, and on-demand
+> instead of always-on recording). For how the tool actually works, see [README.md](README.md).
+> Kept for design history.
+
 > 상태: **개발 전 컨펌 대기**. 아래 §7 확인 항목 답변 + 전체 컨펌 후 개발 시작.
 > 기술 근거: 웹 조사 기반(신뢰도 표기). 명령/설정 예시는 빌드 시 실측 검증 예정.
 
